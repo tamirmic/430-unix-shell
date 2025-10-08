@@ -52,43 +52,57 @@ void processLine(char *line) {
     strncpy(last_command, line, MAXLINE); // save history
   }
 
-  // remove trailing newline just in case
   size_t L = strlen(current_line);
   if (L > 0 && current_line[L - 1] == '\n')
     current_line[L - 1] = '\0';
 
-  // --- Split on semicolons (multiple commands) ---
-  char *saveptr_outer = NULL;
-  char *segment = strtok_r(current_line, ";", &saveptr_outer);
+  // --- Parse command segments separated by ';' or '&' ---
+  char *p = current_line;
+  while (*p != '\0') {
+    // Skip leading spaces
+    while (*p == ' ' || *p == '\t')
+      p++;
+    if (*p == '\0')
+      break;
 
-  while (segment != NULL) {
-    // Trim leading spaces
-    while (*segment == ' ' || *segment == '\t')
-      segment++;
+    // Find the end of this command (either ';', '&', or end of string)
+    char *start = p;
+    bool background = false;
+    while (*p != '\0' && *p != ';' && *p != '&')
+      p++;
 
-    if (*segment == '\0') {
-      segment = strtok_r(NULL, ";", &saveptr_outer);
-      continue;
+    // Mark end of command and check for background symbol
+    char sep = *p;
+    if (*p != '\0') {
+      *p = '\0';
+      p++;
+      if (sep == '&')
+        background = true;
     }
 
-    // Tokenize this individual command
+    // Trim trailing spaces
+    char *end = start + strlen(start) - 1;
+    while (end > start && (*end == ' ' || *end == '\t'))
+      *end-- = '\0';
+
+    // Skip empty commands
+    if (*start == '\0')
+      continue;
+
+    // --- Tokenize this command ---
     char *args[MAXLINE / 2 + 1];
     int argc = 0;
-    char *saveptr_inner = NULL;
-    char *token = strtok_r(segment, " \t\r\n", &saveptr_inner);
-
+    char *saveptr = NULL;
+    char *token = strtok_r(start, " \t\r\n", &saveptr);
     while (token != NULL && argc < (MAXLINE / 2)) {
       args[argc++] = token;
-      token = strtok_r(NULL, " \t\r\n", &saveptr_inner);
+      token = strtok_r(NULL, " \t\r\n", &saveptr);
     }
     args[argc] = NULL;
-
-    if (argc == 0) {
-      segment = strtok_r(NULL, ";", &saveptr_outer);
+    if (argc == 0)
       continue;
-    }
 
-    // Fork and exec
+    // --- Fork and exec ---
     pid_t pid = fork();
     if (pid < 0) {
       perror("fork");
@@ -100,12 +114,14 @@ void processLine(char *line) {
               strerror(errno));
       _exit(1);
     } else {
-      int status;
-      if (waitpid(pid, &status, 0) < 0)
-        perror("waitpid");
+      if (!background) {
+        int status;
+        if (waitpid(pid, &status, 0) < 0)
+          perror("waitpid");
+      } else {
+        printf("[bg] %d\n", pid);
+      }
     }
-
-    segment = strtok_r(NULL, ";", &saveptr_outer);
   }
 }
 
