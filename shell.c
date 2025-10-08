@@ -35,43 +35,77 @@ void processLine(char *line) {
   if (line == NULL)
     return;
 
-  // remove trailing newline if present (fetchline already does that, but safe)
-  size_t L = strlen(line);
-  if (L > 0 && line[L - 1] == '\n')
-    line[L - 1] = '\0';
+  static char last_command[MAXLINE] = "";
 
-  // simple tokenization on whitespace
-  char *args[MAXLINE / 2 + 1];
-  int argc = 0;
-  char *saveptr = NULL;
-  char *tok = strtok_r(line, " \t\r\n", &saveptr);
-  while (tok != NULL && argc < (MAXLINE / 2)) {
-    args[argc++] = tok;
-    tok = strtok_r(NULL, " \t\r\n", &saveptr);
-  }
-  args[argc] = NULL;
-
-  if (argc == 0)
-    return; // blank line
-
-  pid_t pid = fork();
-  if (pid < 0) {
-    perror("fork");
-    return;
-  }
-  if (pid == 0) {
-    // child
-    execvp(args[0], args);
-    // if execvp returns, it failed
-    fprintf(stderr, "%s: command not found or exec failed: %s\n", args[0],
-            strerror(errno));
-    _exit(1);
-  } else {
-    // parent: wait for child to finish
-    int status;
-    if (waitpid(pid, &status, 0) < 0) {
-      perror("waitpid");
+  // Handle !! history
+  char current_line[MAXLINE];
+  if (equal(line, "!!")) {
+    if (equal(last_command, "")) {
+      printf("No commands in history.\n");
+      return;
+    } else {
+      printf("%s\n", last_command);
+      strncpy(current_line, last_command, MAXLINE);
     }
+  } else {
+    strncpy(current_line, line, MAXLINE);
+    strncpy(last_command, line, MAXLINE); // save history
+  }
+
+  // remove trailing newline just in case
+  size_t L = strlen(current_line);
+  if (L > 0 && current_line[L - 1] == '\n')
+    current_line[L - 1] = '\0';
+
+  // --- Split on semicolons (multiple commands) ---
+  char *saveptr_outer = NULL;
+  char *segment = strtok_r(current_line, ";", &saveptr_outer);
+
+  while (segment != NULL) {
+    // Trim leading spaces
+    while (*segment == ' ' || *segment == '\t')
+      segment++;
+
+    if (*segment == '\0') {
+      segment = strtok_r(NULL, ";", &saveptr_outer);
+      continue;
+    }
+
+    // Tokenize this individual command
+    char *args[MAXLINE / 2 + 1];
+    int argc = 0;
+    char *saveptr_inner = NULL;
+    char *token = strtok_r(segment, " \t\r\n", &saveptr_inner);
+
+    while (token != NULL && argc < (MAXLINE / 2)) {
+      args[argc++] = token;
+      token = strtok_r(NULL, " \t\r\n", &saveptr_inner);
+    }
+    args[argc] = NULL;
+
+    if (argc == 0) {
+      segment = strtok_r(NULL, ";", &saveptr_outer);
+      continue;
+    }
+
+    // Fork and exec
+    pid_t pid = fork();
+    if (pid < 0) {
+      perror("fork");
+      return;
+    }
+    if (pid == 0) {
+      execvp(args[0], args);
+      fprintf(stderr, "%s: command not found or exec failed: %s\n", args[0],
+              strerror(errno));
+      _exit(1);
+    } else {
+      int status;
+      if (waitpid(pid, &status, 0) < 0)
+        perror("waitpid");
+    }
+
+    segment = strtok_r(NULL, ";", &saveptr_outer);
   }
 }
 
