@@ -31,7 +31,49 @@ int interactiveShell() {
   return 0;
 }
 
-void processLine(char *line) { printf("processing line: %s\n", line); }
+void processLine(char *line) {
+  if (line == NULL)
+    return;
+
+  // remove trailing newline if present (fetchline already does that, but safe)
+  size_t L = strlen(line);
+  if (L > 0 && line[L - 1] == '\n')
+    line[L - 1] = '\0';
+
+  // simple tokenization on whitespace
+  char *args[MAXLINE / 2 + 1];
+  int argc = 0;
+  char *saveptr = NULL;
+  char *tok = strtok_r(line, " \t\r\n", &saveptr);
+  while (tok != NULL && argc < (MAXLINE / 2)) {
+    args[argc++] = tok;
+    tok = strtok_r(NULL, " \t\r\n", &saveptr);
+  }
+  args[argc] = NULL;
+
+  if (argc == 0)
+    return; // blank line
+
+  pid_t pid = fork();
+  if (pid < 0) {
+    perror("fork");
+    return;
+  }
+  if (pid == 0) {
+    // child
+    execvp(args[0], args);
+    // if execvp returns, it failed
+    fprintf(stderr, "%s: command not found or exec failed: %s\n", args[0],
+            strerror(errno));
+    _exit(1);
+  } else {
+    // parent: wait for child to finish
+    int status;
+    if (waitpid(pid, &status, 0) < 0) {
+      perror("waitpid");
+    }
+  }
+}
 
 int runTests() {
   printf("*** Running basic tests ***\n");
