@@ -37,7 +37,7 @@ void processLine(char *line) {
 
   static char last_command[MAXLINE] = "";
 
-  // Handle !! history
+  // Handle !! command for history
   char current_line[MAXLINE];
   if (equal(line, "!!")) {
     if (equal(last_command, "")) {
@@ -49,29 +49,27 @@ void processLine(char *line) {
     }
   } else {
     strncpy(current_line, line, MAXLINE);
-    strncpy(last_command, line, MAXLINE); // save history
+    strncpy(last_command, line, MAXLINE);
   }
 
+  // Remove the trailing newline
   size_t L = strlen(current_line);
   if (L > 0 && current_line[L - 1] == '\n')
     current_line[L - 1] = '\0';
 
-  // --- Parse command segments separated by ';' or '&' ---
+  // Parse command segments separated by ';' or '&'
   char *p = current_line;
   while (*p != '\0') {
-    // Skip leading spaces
     while (*p == ' ' || *p == '\t')
       p++;
     if (*p == '\0')
       break;
 
-    // Find the end of this command (either ';', '&', or end of string)
     char *start = p;
     bool background = false;
     while (*p != '\0' && *p != ';' && *p != '&')
       p++;
 
-    // Mark end of command and check for background symbol
     char sep = *p;
     if (*p != '\0') {
       *p = '\0';
@@ -85,11 +83,10 @@ void processLine(char *line) {
     while (end > start && (*end == ' ' || *end == '\t'))
       *end-- = '\0';
 
-    // Skip empty commands
     if (*start == '\0')
       continue;
 
-    // --- Tokenize this command ---
+    // Tokenize this command
     char *args[MAXLINE / 2 + 1];
     int argc = 0;
     char *saveptr = NULL;
@@ -102,13 +99,51 @@ void processLine(char *line) {
     if (argc == 0)
       continue;
 
-    // --- Fork and exec ---
+    // Handle redirection symbols (< and >)
+    char *input_file = NULL;
+    char *output_file = NULL;
+    for (int i = 0; i < argc; i++) {
+      if (equal(args[i], "<")) {
+        if (i + 1 < argc)
+          input_file = args[i + 1];
+        args[i] = NULL;
+        break;
+      } else if (equal(args[i], ">")) {
+        if (i + 1 < argc)
+          output_file = args[i + 1];
+        args[i] = NULL;
+        break;
+      }
+    }
+
+    // Fork and exec
     pid_t pid = fork();
     if (pid < 0) {
       perror("fork");
       return;
     }
     if (pid == 0) {
+      // Apply redirection inside child
+      if (input_file != NULL) {
+        int fd = open(input_file, O_RDONLY);
+        if (fd < 0) {
+          perror("open for input");
+          _exit(1);
+        }
+        dup2(fd, STDIN_FILENO);
+        close(fd);
+      }
+
+      if (output_file != NULL) {
+        int fd = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) {
+          perror("open for output");
+          _exit(1);
+        }
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+      }
+
       execvp(args[0], args);
       fprintf(stderr, "%s: command not found or exec failed: %s\n", args[0],
               strerror(errno));
