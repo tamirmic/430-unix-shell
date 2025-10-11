@@ -32,130 +32,167 @@ int interactiveShell() {
 }
 
 void processLine(char *line) {
-  if (line == NULL)
+  if (line == NULL) {
     return;
+  }
 
   static char last_command[MAXLINE] = "";
-
-  // Handle !! command for history
   char current_line[MAXLINE];
+
+  // Handle !!
   if (equal(line, "!!")) {
     if (equal(last_command, "")) {
       printf("No commands in history.\n");
       return;
-    } else {
-      printf("%s\n", last_command);
-      strncpy(current_line, last_command, MAXLINE);
     }
+    printf("%s\n", last_command);
+    strncpy(current_line, last_command, MAXLINE);
   } else {
     strncpy(current_line, line, MAXLINE);
     strncpy(last_command, line, MAXLINE);
   }
 
-  // Remove the trailing newline
   size_t L = strlen(current_line);
-  if (L > 0 && current_line[L - 1] == '\n')
+  if (L > 0 && current_line[L - 1] == '\n') {
     current_line[L - 1] = '\0';
+  }
 
-  // Parse command segments separated by ';' or '&'
+  // Split by ';' or '&'
   char *p = current_line;
   while (*p != '\0') {
-    while (*p == ' ' || *p == '\t')
+    while (*p == ' ' || *p == '\t') {
       p++;
-    if (*p == '\0')
+    }
+    if (*p == '\0') {
       break;
-
+    }
     char *start = p;
     bool background = false;
-    while (*p != '\0' && *p != ';' && *p != '&')
+    while (*p != '\0' && *p != ';' && *p != '&') {
       p++;
-
+    }
     char sep = *p;
     if (*p != '\0') {
       *p = '\0';
       p++;
-      if (sep == '&')
+      if (sep == '&') {
         background = true;
+      }
     }
 
-    // Trim trailing spaces
     char *end = start + strlen(start) - 1;
-    while (end > start && (*end == ' ' || *end == '\t'))
+    while (end > start && (*end == ' ' || *end == '\t')) {
       *end-- = '\0';
-
-    if (*start == '\0')
+    }
+    if (*start == '\0') {
       continue;
-
-    // Tokenize this command
-    char *args[MAXLINE / 2 + 1];
-    int argc = 0;
+    }
+    // Split by pipes '|'
+    char *commands[32];
+    int num_cmds = 0;
     char *saveptr = NULL;
-    char *token = strtok_r(start, " \t\r\n", &saveptr);
-    while (token != NULL && argc < (MAXLINE / 2)) {
-      args[argc++] = token;
-      token = strtok_r(NULL, " \t\r\n", &saveptr);
-    }
-    args[argc] = NULL;
-    if (argc == 0)
-      continue;
-
-    // Handle redirection symbols (< and >)
-    char *input_file = NULL;
-    char *output_file = NULL;
-    for (int i = 0; i < argc; i++) {
-      if (equal(args[i], "<")) {
-        if (i + 1 < argc)
-          input_file = args[i + 1];
-        args[i] = NULL;
-        break;
-      } else if (equal(args[i], ">")) {
-        if (i + 1 < argc)
-          output_file = args[i + 1];
-        args[i] = NULL;
-        break;
+    char *token = strtok_r(start, "|", &saveptr);
+    while (token && num_cmds < 32) {
+      while (*token == ' ' || *token == '\t') {
+        token++;
       }
+      commands[num_cmds++] = token;
+      token = strtok_r(NULL, "|", &saveptr);
     }
 
-    // Fork and exec
-    pid_t pid = fork();
-    if (pid < 0) {
-      perror("fork");
-      return;
-    }
-    if (pid == 0) {
-      // Apply redirection inside child
-      if (input_file != NULL) {
-        int fd = open(input_file, O_RDONLY);
-        if (fd < 0) {
-          perror("open for input");
-          _exit(1);
+    int prev_fd = -1;
+    pid_t pids[32];
+
+    for (int i = 0; i < num_cmds; i++) {
+      int pipefd[2];
+      if (i < num_cmds - 1 && pipe(pipefd) < 0) {
+        perror("pipe");
+        return;
+      }
+
+      // Tokenize all the arguments
+      char *args[MAXLINE / 2 + 1];
+      int argc = 0;
+      char *in_file = NULL, *out_file = NULL;
+      char *tok, *saveptr2 = NULL;
+      tok = strtok_r(commands[i], " \t\r\n", &saveptr2);
+      while (tok && argc < MAXLINE / 2) {
+        if (equal(tok, "<")) {
+          in_file = strtok_r(NULL, " \t\r\n", &saveptr2);
+        } else if (equal(tok, ">")) {
+          out_file = strtok_r(NULL, " \t\r\n", &saveptr2);
+        } else {
+          args[argc++] = tok;
         }
-        dup2(fd, STDIN_FILENO);
-        close(fd);
+        tok = strtok_r(NULL, " \t\r\n", &saveptr2);
+      }
+      args[argc] = NULL;
+      if (argc == 0) {
+        continue;
+      }
+      pid_t pid = fork();
+      if (pid < 0) {
+        perror("fork");
+        return;
       }
 
-      if (output_file != NULL) {
-        int fd = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) {
-          perror("open for output");
-          _exit(1);
+      if (pid == 0) {
+        // Handle input redirection
+        if (in_file) {
+          int fd = open(in_file, O_RDONLY);
+          if (fd < 0) {
+            perror(in_file);
+            _exit(1);
+          }
+          dup2(fd, STDIN_FILENO);
+          close(fd);
         }
-        dup2(fd, STDOUT_FILENO);
-        close(fd);
-      }
 
-      execvp(args[0], args);
-      fprintf(stderr, "%s: command not found or exec failed: %s\n", args[0],
-              strerror(errno));
-      _exit(1);
-    } else {
-      if (!background) {
-        int status;
-        if (waitpid(pid, &status, 0) < 0)
-          perror("waitpid");
+        // Handle output redirection
+        if (out_file) {
+          int fd = open(out_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+          if (fd < 0) {
+            perror(out_file);
+            _exit(1);
+          }
+          dup2(fd, STDOUT_FILENO);
+          close(fd);
+        }
+
+        // Pipe input
+        if (prev_fd != -1) {
+          dup2(prev_fd, STDIN_FILENO);
+          close(prev_fd);
+        }
+
+        // Pipe output
+        if (i < num_cmds - 1) {
+          close(pipefd[0]);
+          dup2(pipefd[1], STDOUT_FILENO);
+          close(pipefd[1]);
+        }
+
+        execvp(args[0], args);
+        fprintf(stderr, "%s: command failed: %s\n", args[0], strerror(errno));
+        _exit(1);
       } else {
-        printf("[bg] %d\n", pid);
+        pids[i] = pid;
+        if (prev_fd != -1) {
+          close(prev_fd);
+        }
+        if (i < num_cmds - 1) {
+          close(pipefd[1]);
+          prev_fd = pipefd[0];
+        }
       }
+    }
+
+    if (!background) {
+      for (int i = 0; i < num_cmds; i++) {
+        waitpid(pids[i], NULL, 0);
+      }
+    } else {
+      printf("[bg] %d\n", pids[num_cmds - 1]);
     }
   }
 }
